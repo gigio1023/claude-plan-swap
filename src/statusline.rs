@@ -6,10 +6,11 @@
 
 use crate::context::AppContext;
 use crate::domain::{
-    AccountKind, AccountName, Config, LimitWindow, RateLimitSnapshot, RoutingMode, State,
+    AccountKind, AccountName, Config, LimitWindow, RateLimitSnapshot, RouteLock, RoutingMode, State,
 };
 use crate::keychain::Keychain;
 use crate::notification;
+use crate::routing;
 use crate::storage;
 use crate::switcher::{self, SwitchOptions};
 use crate::time::now_epoch;
@@ -82,8 +83,8 @@ fn render_team(
     };
     ctx.ensure_app_dir()?;
     // Persist every valid snapshot, including below-threshold usage. If the
-    // user switches to enterprise early, the enterprise statusline can still
-    // count down to the previously observed team reset time.
+    // user routes to an enterprise account early, the enterprise statusline can
+    // still count down to the previously observed team reset time.
     storage::save_rate_limits(ctx, &snapshot)?;
 
     let Some((label, pct)) = max_limit(&snapshot) else {
@@ -96,15 +97,14 @@ fn render_team(
 
     if pct >= 100 {
         if config.mode == RoutingMode::Auto
-            && current_account == "team"
-            && state.accounts.contains_key("enterprise")
-            && !ctx.route_lock_path().exists()
+            && let Some(target) = routing::enterprise_target(state, current_account)
         {
-            return auto_switch(ctx, keychain, "enterprise", "auto switched to enterprise");
+            return auto_route_to_enterprise(ctx, keychain, &target);
         }
+        let event_key = format!("team-limit:{current_account}");
         notification::notify_once(
             ctx,
-            "team-limit",
+            &event_key,
             "claude-quota-router",
             &format!("{current_account} quota is full. Run claude-quota-router list."),
         )
@@ -114,9 +114,10 @@ fn render_team(
         )));
     }
 
+    let event_key = format!("team-alert:{current_account}");
     notification::notify_once(
         ctx,
-        "team-alert",
+        &event_key,
         "claude-quota-router",
         &format!("{current_account} usage is {pct}% ({label}). Prepare to switch."),
     )
@@ -136,6 +137,11 @@ fn render_enterprise(
     let Some(snapshot) = storage::load_rate_limits(ctx)? else {
         return Ok(Some(current_account.to_string()));
     };
+    let lock = storage::load_route_lock(ctx)?;
+    let source_account = lock
+        .as_ref()
+        .map(|value| value.source_account.as_str())
+        .unwrap_or("team account");
     // The first reset to arrive is the first point at which returning to a team
     // account is useful. Showing the earliest window keeps the prompt actionable.
     let Some((label, reset_at)) = earliest_reset(&snapshot) else {
@@ -145,62 +151,74 @@ fn render_enterprise(
 
     if remaining <= 0 {
         if config.mode == RoutingMode::Auto
-            && current_account == "enterprise"
-            && state.accounts.contains_key("team")
-            && ctx.route_lock_path().exists()
+            && let Some(target) = team_return_target(ctx, state, current_account, lock.as_ref())
         {
-            return auto_switch(ctx, keychain, "team", "auto switched to team");
+            return auto_switch(ctx, keychain, &target, &format!("auto routed to {target}"));
         }
+        let event_key = format!("reset:{source_account}");
         notification::notify_once(
             ctx,
-            "reset",
+            &event_key,
             "claude-quota-router",
-            "team quota reset is complete. Run claude-quota-router list.",
-        )
-        .ok();
-        return Ok(Some(
-            "team quota reset done -> claude-quota-router list".to_string(),
-        ));
-    }
-
-    if remaining <= 60 {
-        notification::notify_once(
-            ctx,
-            "reset-1min",
-            "claude-quota-router",
-            "team quota resets within 1 minute.",
+            &format!("{source_account} quota reset is complete. Run claude-quota-router list."),
         )
         .ok();
         return Ok(Some(format!(
-            "team reset in {remaining}s({label}) -> claude-quota-router list"
+            "{source_account} reset done -> claude-quota-router list"
+        )));
+    }
+
+    if remaining <= 60 {
+        let event_key = format!("reset-1min:{source_account}");
+        notification::notify_once(
+            ctx,
+            &event_key,
+            "claude-quota-router",
+            &format!("{source_account} quota resets within 1 minute."),
+        )
+        .ok();
+        return Ok(Some(format!(
+            "{source_account} reset in {remaining}s({label}) -> claude-quota-router list"
         )));
     }
     if remaining <= 300 {
         let minutes = (remaining + 59) / 60;
+        let event_key = format!("reset-5min:{source_account}");
         notification::notify_once(
             ctx,
-            "reset-5min",
+            &event_key,
             "claude-quota-router",
-            &format!("team quota resets in {minutes} minutes."),
+            &format!("{source_account} quota resets in {minutes} minutes."),
         )
         .ok();
         return Ok(Some(format!(
-            "team reset in {minutes}m({label}) -> claude-quota-router list"
+            "{source_account} reset in {minutes}m({label}) -> claude-quota-router list"
         )));
     }
 
     let minutes = remaining / 60;
     if minutes >= 60 {
         Ok(Some(format!(
-            "{current_account} | team reset in {}h{}m({label})",
+            "{current_account} | {source_account} reset in {}h{}m({label})",
             minutes / 60,
             minutes % 60
         )))
     } else {
         Ok(Some(format!(
-            "{current_account} | team reset in {minutes}m({label})"
+            "{current_account} | {source_account} reset in {minutes}m({label})"
         )))
     }
+}
+
+fn auto_route_to_enterprise(
+    ctx: &AppContext,
+    keychain: &Keychain,
+    target: &str,
+) -> Result<Option<String>> {
+    auto_switch(ctx, keychain, target, &format!("auto routed to {target}"))?;
+    Ok(Some(format!(
+        "auto routed to {target}; restart Claude Code"
+    )))
 }
 
 fn auto_switch(
@@ -220,6 +238,23 @@ fn auto_switch(
         },
     )?;
     Ok(Some(format!("{message}; restart Claude Code")))
+}
+
+fn team_return_target(
+    ctx: &AppContext,
+    state: &State,
+    current_account: &str,
+    lock: Option<&RouteLock>,
+) -> Option<String> {
+    if let Some(lock) = lock
+        && let Some(target) = routing::locked_team_target(state, current_account, lock)
+    {
+        return Some(target);
+    }
+    if ctx.route_lock_path().exists() {
+        return routing::previous_team_target(state, current_account);
+    }
+    None
 }
 
 fn parse_rate_limits(input: &Value) -> Option<RateLimitSnapshot> {

@@ -114,6 +114,13 @@ pub(crate) struct AccountEntry {
     pub(crate) updated_at: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RouteLock {
+    pub(crate) source_account: String,
+    pub(crate) routed_account: String,
+    pub(crate) created_at: u64,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub(crate) struct State {
     pub(crate) active_account: Option<String>,

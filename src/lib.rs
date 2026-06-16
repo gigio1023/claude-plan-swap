@@ -12,6 +12,7 @@ mod context;
 mod domain;
 mod keychain;
 mod notification;
+mod routing;
 mod settings;
 mod statusline;
 mod storage;

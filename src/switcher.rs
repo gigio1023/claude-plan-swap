@@ -5,12 +5,12 @@
 //! activate the target credential, update state, then reset quota side effects.
 
 use crate::context::AppContext;
-use crate::domain::{AccountKind, AccountName, State};
+use crate::domain::{AccountKind, AccountName, RouteLock, State};
 use crate::keychain::Keychain;
 use crate::notification;
 use crate::storage;
+use crate::time::now_epoch;
 use anyhow::{Context, Result, anyhow, bail};
-use std::fs;
 use std::io::{self, IsTerminal, Write};
 
 #[derive(Clone, Copy, Debug)]
@@ -44,7 +44,14 @@ pub(crate) fn switch_to(
         .read_account(name)
         .with_context(|| format!("failed to read saved credential for {name}"))?;
     let active_credential = keychain.read_active(&active_account).unwrap_or_default();
+    let old_current = state.current_account.clone();
+    let route_lock =
+        route_lock_for_transition(&state, old_current.as_deref(), name, target_entry.kind);
+
     if active_credential == target_credential {
+        if let Some(lock) = &route_lock {
+            storage::save_route_lock(ctx, lock)?;
+        }
         state.active_account = Some(active_account);
         state.current_account = Some(name.to_string());
         storage::save_state(ctx, &state)?;
@@ -54,11 +61,19 @@ pub(crate) fn switch_to(
         return Ok(());
     }
 
-    keychain
+    if let Some(lock) = &route_lock {
+        storage::save_route_lock(ctx, lock)?;
+    }
+    if let Err(error) = keychain
         .upsert_active(&active_account, &target_credential)
-        .with_context(|| format!("failed to activate account {name}"))?;
+        .with_context(|| format!("failed to activate account {name}"))
+    {
+        if route_lock.is_some() {
+            storage::remove_route_lock(ctx).ok();
+        }
+        return Err(error);
+    }
 
-    let old_current = state.current_account.clone();
     if old_current.as_deref() != Some(name.as_str()) {
         state.previous_account = old_current;
     }
@@ -132,16 +147,38 @@ fn refresh_current_backup(
 fn reset_quota_side_effects(ctx: &AppContext, target_kind: AccountKind) {
     match target_kind {
         AccountKind::Enterprise => {
-            fs::write(ctx.route_lock_path(), b"").ok();
             notification::clear_notified(ctx).ok();
         }
         AccountKind::Team => {
-            fs::remove_file(ctx.route_lock_path()).ok();
-            fs::remove_file(ctx.rate_limits_path()).ok();
+            storage::remove_route_lock(ctx).ok();
+            std::fs::remove_file(ctx.rate_limits_path()).ok();
             notification::clear_notified(ctx).ok();
         }
-        AccountKind::Other => {}
+        AccountKind::Other => {
+            storage::remove_route_lock(ctx).ok();
+            notification::clear_notified(ctx).ok();
+        }
     }
+}
+
+fn route_lock_for_transition(
+    state: &State,
+    current_account: Option<&str>,
+    target: &AccountName,
+    target_kind: AccountKind,
+) -> Option<RouteLock> {
+    let source = current_account?;
+    if source == target.as_str() || target_kind != AccountKind::Enterprise {
+        return None;
+    }
+    if state.accounts.get(source).map(|entry| entry.kind) != Some(AccountKind::Team) {
+        return None;
+    }
+    Some(RouteLock {
+        source_account: source.to_string(),
+        routed_account: target.to_string(),
+        created_at: now_epoch(),
+    })
 }
 
 /// Require an explicit acknowledgement before touching the active credential.
@@ -166,5 +203,71 @@ fn confirm_switch(name: &AccountName, yes: bool) -> Result<()> {
     match answer.trim() {
         "y" | "Y" | "yes" | "YES" => Ok(()),
         _ => bail!("cancelled"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::AccountEntry;
+    use std::collections::BTreeMap;
+
+    fn state_with(accounts: &[(&str, AccountKind)]) -> State {
+        let mut entries = BTreeMap::new();
+        for (name, kind) in accounts {
+            entries.insert(
+                (*name).to_string(),
+                AccountEntry {
+                    kind: *kind,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+        }
+        State {
+            active_account: Some("active".to_string()),
+            current_account: Some("team-main".to_string()),
+            previous_account: None,
+            accounts: entries,
+        }
+    }
+
+    #[test]
+    fn records_source_team_when_routing_to_enterprise() {
+        let state = state_with(&[
+            ("enterprise-main", AccountKind::Enterprise),
+            ("team-main", AccountKind::Team),
+        ]);
+        let target = AccountName::parse("enterprise-main").unwrap();
+        let lock = route_lock_for_transition(
+            &state,
+            state.current_account.as_deref(),
+            &target,
+            AccountKind::Enterprise,
+        )
+        .unwrap();
+
+        assert_eq!(lock.source_account, "team-main");
+        assert_eq!(lock.routed_account, "enterprise-main");
+    }
+
+    #[test]
+    fn does_not_record_lock_for_team_target() {
+        let state = state_with(&[
+            ("enterprise-main", AccountKind::Enterprise),
+            ("team-main", AccountKind::Team),
+            ("team-side", AccountKind::Team),
+        ]);
+        let target = AccountName::parse("team-side").unwrap();
+
+        assert!(
+            route_lock_for_transition(
+                &state,
+                state.current_account.as_deref(),
+                &target,
+                AccountKind::Team,
+            )
+            .is_none()
+        );
     }
 }

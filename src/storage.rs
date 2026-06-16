@@ -5,11 +5,12 @@
 //! and the quota cache used by the statusline countdown.
 
 use crate::context::AppContext;
-use crate::domain::{Config, RateLimitSnapshot, State};
+use crate::domain::{Config, RateLimitSnapshot, RouteLock, State};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
 pub(crate) fn load_state(ctx: &AppContext) -> Result<State> {
@@ -45,6 +46,33 @@ pub(crate) fn load_rate_limits(ctx: &AppContext) -> Result<Option<RateLimitSnaps
 
 pub(crate) fn save_rate_limits(ctx: &AppContext, snapshot: &RateLimitSnapshot) -> Result<()> {
     save_json(&ctx.rate_limits_path(), snapshot)
+}
+
+pub(crate) fn load_route_lock(ctx: &AppContext) -> Result<Option<RouteLock>> {
+    let path = ctx.route_lock_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse {}", path.display()))
+        .map(Some)
+}
+
+pub(crate) fn save_route_lock(ctx: &AppContext, lock: &RouteLock) -> Result<()> {
+    save_json(&ctx.route_lock_path(), lock)
+}
+
+pub(crate) fn remove_route_lock(ctx: &AppContext) -> Result<()> {
+    match fs::remove_file(ctx.route_lock_path()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("failed to remove route lock"),
+    }
 }
 
 pub(crate) fn load_notified(ctx: &AppContext) -> Result<BTreeSet<String>> {

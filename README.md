@@ -4,14 +4,14 @@ Claude Quota Router switches saved Claude Code accounts on macOS and shows quota
 
 ## Scenario
 
-Use it when a team account is near quota and an enterprise account should run until the team quota resets.
+Use it when one team account is near quota and any saved enterprise account should run until that team account resets.
 
 ```text
-team account
+team-main account
   -> quota alert in statusline
-  -> switch to enterprise
-  -> team reset countdown
-  -> switch back to team
+  -> switch to enterprise-main
+  -> team-main reset countdown
+  -> switch back to team-main
 ```
 
 ## Install
@@ -25,18 +25,20 @@ cp target/release/claude-quota-router ~/.local/bin/
 
 ## Setup
 
-Save each Claude Code login once.
+Save each Claude Code login once. Use any lowercase account name.
 
-1. Log in with the team account.
+1. Log in with a team account.
 
 ```bash
-claude-quota-router setup team --kind team
+claude-quota-router setup team-main --kind team
+claude-quota-router setup team-side --kind team
 ```
 
-2. Log out, log in with the enterprise account, then save it.
+2. Log out, log in with an enterprise account, then save it.
 
 ```bash
-claude-quota-router setup enterprise --kind enterprise
+claude-quota-router setup enterprise-main --kind enterprise
+claude-quota-router setup enterprise-backup --kind enterprise
 ```
 
 3. Install the statusline wrapper.
@@ -56,8 +58,8 @@ claude-quota-router config --alert-at 95 --mode manual
 Switch accounts from a shell or from Claude Code with `!`.
 
 ```bash
-claude-quota-router switch enterprise --yes
-claude-quota-router switch team --yes
+claude-quota-router switch enterprise-main --yes
+claude-quota-router switch team-side --yes
 claude-quota-router toggle --yes
 claude-quota-router list
 claude-quota-router status
@@ -65,7 +67,7 @@ claude-quota-router status
 
 ## Auto Mode
 
-Auto mode only handles the conventional `team` and `enterprise` account names.
+Auto mode uses account kind, not account name.
 
 ```bash
 claude-quota-router config --mode auto
@@ -73,8 +75,8 @@ claude-quota-router config --mode auto
 
 | State | Action |
 |---|---|
-| `team` reaches 100% | switch to `enterprise` |
-| cached team reset time passes | switch to `team` |
+| current `team` account reaches 100% | switch to first `enterprise` account by name |
+| cached reset time passes | switch back to the source `team` account |
 
 ## Storage
 
