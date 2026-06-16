@@ -6,7 +6,7 @@
 use crate::claude;
 use crate::cli::Commands;
 use crate::context::AppContext;
-use crate::domain::{Config, PlanEntry, PlanName, SwapMode};
+use crate::domain::{AccountEntry, AccountName, Config, RoutingMode};
 use crate::keychain::Keychain;
 use crate::settings;
 use crate::statusline;
@@ -45,8 +45,8 @@ impl App {
         }
     }
 
-    fn setup(&self, name: &str, kind: Option<crate::domain::PlanKind>) -> Result<()> {
-        let name = PlanName::parse(name)?;
+    fn setup(&self, name: &str, kind: Option<crate::domain::AccountKind>) -> Result<()> {
+        let name = AccountName::parse(name)?;
         self.ctx.ensure_app_dir()?;
 
         let mut state = storage::load_state(&self.ctx)?;
@@ -64,23 +64,23 @@ impl App {
         // Prefer an explicit CLI override for import/migration cases. Otherwise
         // ask Claude Code first and fall back to the credential JSON shape.
         let kind =
-            kind.unwrap_or_else(|| claude::detect_plan_kind_from_active_credential(&credential));
+            kind.unwrap_or_else(|| claude::detect_account_kind_from_active_credential(&credential));
 
         self.keychain
-            .upsert_plan(&name, &credential)
-            .with_context(|| format!("failed to save plan credential for {name}"))?;
+            .upsert_account(&name, &credential)
+            .with_context(|| format!("failed to save account credential for {name}"))?;
 
         let now = now_epoch();
         let created_at = state
-            .plans
+            .accounts
             .get(name.as_str())
             .map(|entry| entry.created_at)
             .unwrap_or(now);
         state.active_account = Some(active_account);
-        state.current_plan = Some(name.to_string());
-        state.plans.insert(
+        state.current_account = Some(name.to_string());
+        state.accounts.insert(
             name.clone().into_string(),
-            PlanEntry {
+            AccountEntry {
                 kind,
                 created_at,
                 updated_at: now,
@@ -88,12 +88,12 @@ impl App {
         );
         storage::save_state(&self.ctx, &state)?;
 
-        println!("saved plan: {name} ({})", kind.as_str());
+        println!("saved account: {name} ({})", kind.as_str());
         Ok(())
     }
 
     fn switch(&self, name: &str, yes: bool) -> Result<()> {
-        let name = PlanName::parse(name)?;
+        let name = AccountName::parse(name)?;
         switcher::switch_to(
             &self.ctx,
             &self.keychain,
@@ -105,24 +105,24 @@ impl App {
     fn toggle(&self, yes: bool) -> Result<()> {
         let state = storage::load_state(&self.ctx)?;
         let previous = state
-            .previous_plan
+            .previous_account
             .as_deref()
-            .ok_or_else(|| anyhow!("no previous plan recorded"))?;
-        if !state.plans.contains_key(previous) {
-            bail!("previous plan is not saved: {previous}");
+            .ok_or_else(|| anyhow!("no previous account recorded"))?;
+        if !state.accounts.contains_key(previous) {
+            bail!("previous account is not saved: {previous}");
         }
         self.switch(previous, yes)
     }
 
     fn list(&self) -> Result<()> {
         let state = storage::load_state(&self.ctx)?;
-        if state.plans.is_empty() {
-            println!("no plans saved");
+        if state.accounts.is_empty() {
+            println!("no accounts saved");
             return Ok(());
         }
 
-        for (name, entry) in &state.plans {
-            let marker = if state.current_plan.as_deref() == Some(name.as_str()) {
+        for (name, entry) in &state.accounts {
+            let marker = if state.current_account.as_deref() == Some(name.as_str()) {
                 "*"
             } else {
                 " "
@@ -133,32 +133,32 @@ impl App {
     }
 
     fn remove(&self, name: &str) -> Result<()> {
-        let name = PlanName::parse(name)?;
+        let name = AccountName::parse(name)?;
         let mut state = storage::load_state(&self.ctx)?;
-        if state.current_plan.as_deref() == Some(name.as_str()) {
-            bail!("cannot remove the current plan; switch to another plan first");
+        if state.current_account.as_deref() == Some(name.as_str()) {
+            bail!("cannot remove the current account; switch to another account first");
         }
-        if state.plans.remove(name.as_str()).is_none() {
-            bail!("plan is not saved: {name}");
+        if state.accounts.remove(name.as_str()).is_none() {
+            bail!("account is not saved: {name}");
         }
-        self.keychain.delete_plan(&name).ok();
-        if state.previous_plan.as_deref() == Some(name.as_str()) {
-            state.previous_plan = None;
+        self.keychain.delete_account(&name).ok();
+        if state.previous_account.as_deref() == Some(name.as_str()) {
+            state.previous_account = None;
         }
         storage::save_state(&self.ctx, &state)?;
-        println!("removed plan: {name}");
+        println!("removed account: {name}");
         Ok(())
     }
 
     fn current(&self) -> Result<()> {
         let mut state = storage::load_state(&self.ctx)?;
-        if let Some(current) = state.current_plan {
+        if let Some(current) = state.current_account {
             println!("{current}");
             return Ok(());
         }
 
         if let Some(detected) =
-            switcher::detect_current_plan_by_credential(&self.keychain, &mut state)?
+            switcher::detect_current_account_by_credential(&self.keychain, &mut state)?
         {
             storage::save_state(&self.ctx, &state)?;
             println!("{detected}");
@@ -174,11 +174,11 @@ impl App {
         let config = storage::load_config(&self.ctx)?;
         println!(
             "current: {}",
-            state.current_plan.as_deref().unwrap_or("unknown")
+            state.current_account.as_deref().unwrap_or("unknown")
         );
         println!(
             "previous: {}",
-            state.previous_plan.as_deref().unwrap_or("none")
+            state.previous_account.as_deref().unwrap_or("none")
         );
         println!(
             "active keychain account: {}",
@@ -189,7 +189,7 @@ impl App {
             config.alert_at,
             config.mode.as_str()
         );
-        println!("plans: {}", state.plans.len());
+        println!("accounts: {}", state.accounts.len());
 
         if let Some(snapshot) = storage::load_rate_limits(&self.ctx)? {
             println!(
@@ -206,7 +206,7 @@ impl App {
         Ok(())
     }
 
-    fn config(&self, alert_at: Option<u8>, mode: Option<SwapMode>) -> Result<()> {
+    fn config(&self, alert_at: Option<u8>, mode: Option<RoutingMode>) -> Result<()> {
         self.ctx.ensure_app_dir()?;
         let mut config = storage::load_config(&self.ctx)?;
         if let Some(alert_at) = alert_at {

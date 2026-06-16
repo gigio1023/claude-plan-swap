@@ -1,4 +1,4 @@
-//! Claude Plan Swap library crate.
+//! Claude Quota Router library crate.
 //!
 //! The binary is intentionally thin. Most behavior lives in this library so
 //! command routing, state transitions, Keychain access, and statusline rendering

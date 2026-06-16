@@ -5,7 +5,9 @@
 //! when quota data is absent.
 
 use crate::context::AppContext;
-use crate::domain::{Config, LimitWindow, PlanKind, PlanName, RateLimitSnapshot, State, SwapMode};
+use crate::domain::{
+    AccountKind, AccountName, Config, LimitWindow, RateLimitSnapshot, RoutingMode, State,
+};
 use crate::keychain::Keychain;
 use crate::notification;
 use crate::storage;
@@ -31,9 +33,9 @@ pub(crate) fn handle(ctx: &AppContext, keychain: &Keychain) -> Result<()> {
     let inner_output = run_inner_statusline(ctx, &input);
     let state = storage::load_state(ctx)?;
     let config = storage::load_config(ctx)?;
-    let swap_output = render_swap_output(ctx, keychain, &state, &config, &parsed)?;
+    let router_output = render_router_output(ctx, keychain, &state, &config, &parsed)?;
 
-    match (swap_output.as_deref(), inner_output.as_deref()) {
+    match (router_output.as_deref(), inner_output.as_deref()) {
         (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => println!("{a} | {b}"),
         (Some(a), _) if !a.is_empty() => println!("{a}"),
         (_, Some(b)) if !b.is_empty() => println!("{b}"),
@@ -43,26 +45,26 @@ pub(crate) fn handle(ctx: &AppContext, keychain: &Keychain) -> Result<()> {
     Ok(())
 }
 
-fn render_swap_output(
+fn render_router_output(
     ctx: &AppContext,
     keychain: &Keychain,
     state: &State,
     config: &Config,
     input: &Value,
 ) -> Result<Option<String>> {
-    let current_plan = match state.current_plan.as_deref() {
+    let current_account = match state.current_account.as_deref() {
         Some(value) => value,
         None => return Ok(None),
     };
-    let current_kind = match state.plans.get(current_plan) {
+    let current_kind = match state.accounts.get(current_account) {
         Some(entry) => entry.kind,
         None => return Ok(None),
     };
 
     match current_kind {
-        PlanKind::Team => render_team(ctx, keychain, state, config, current_plan, input),
-        PlanKind::Enterprise => render_enterprise(ctx, keychain, state, config, current_plan),
-        PlanKind::Other => Ok(Some(current_plan.to_string())),
+        AccountKind::Team => render_team(ctx, keychain, state, config, current_account, input),
+        AccountKind::Enterprise => render_enterprise(ctx, keychain, state, config, current_account),
+        AccountKind::Other => Ok(Some(current_account.to_string())),
     }
 }
 
@@ -71,7 +73,7 @@ fn render_team(
     keychain: &Keychain,
     state: &State,
     config: &Config,
-    current_plan: &str,
+    current_account: &str,
     input: &Value,
 ) -> Result<Option<String>> {
     let snapshot = match parse_rate_limits(input) {
@@ -93,34 +95,34 @@ fn render_team(
     }
 
     if pct >= 100 {
-        if config.mode == SwapMode::Auto
-            && current_plan == "team"
-            && state.plans.contains_key("enterprise")
-            && !ctx.swap_lock_path().exists()
+        if config.mode == RoutingMode::Auto
+            && current_account == "team"
+            && state.accounts.contains_key("enterprise")
+            && !ctx.route_lock_path().exists()
         {
             return auto_switch(ctx, keychain, "enterprise", "auto switched to enterprise");
         }
         notification::notify_once(
             ctx,
             "team-limit",
-            "claude-plan-swap",
-            &format!("{current_plan} quota is full. Run claude-plan-swap list."),
+            "claude-quota-router",
+            &format!("{current_account} quota is full. Run claude-quota-router list."),
         )
         .ok();
         return Ok(Some(format!(
-            "{current_plan} LIMIT({label}) -> claude-plan-swap list"
+            "{current_account} LIMIT({label}) -> claude-quota-router list"
         )));
     }
 
     notification::notify_once(
         ctx,
         "team-alert",
-        "claude-plan-swap",
-        &format!("{current_plan} usage is {pct}% ({label}). Prepare to switch."),
+        "claude-quota-router",
+        &format!("{current_account} usage is {pct}% ({label}). Prepare to switch."),
     )
     .ok();
     Ok(Some(format!(
-        "{current_plan} {pct}%({label}) -> claude-plan-swap list"
+        "{current_account} {pct}%({label}) -> claude-quota-router list"
     )))
 }
 
@@ -129,35 +131,35 @@ fn render_enterprise(
     keychain: &Keychain,
     state: &State,
     config: &Config,
-    current_plan: &str,
+    current_account: &str,
 ) -> Result<Option<String>> {
     let Some(snapshot) = storage::load_rate_limits(ctx)? else {
-        return Ok(Some(current_plan.to_string()));
+        return Ok(Some(current_account.to_string()));
     };
     // The first reset to arrive is the first point at which returning to a team
-    // plan is useful. Showing the earliest window keeps the prompt actionable.
+    // account is useful. Showing the earliest window keeps the prompt actionable.
     let Some((label, reset_at)) = earliest_reset(&snapshot) else {
-        return Ok(Some(current_plan.to_string()));
+        return Ok(Some(current_account.to_string()));
     };
     let remaining = reset_at - now_epoch() as i64;
 
     if remaining <= 0 {
-        if config.mode == SwapMode::Auto
-            && current_plan == "enterprise"
-            && state.plans.contains_key("team")
-            && ctx.swap_lock_path().exists()
+        if config.mode == RoutingMode::Auto
+            && current_account == "enterprise"
+            && state.accounts.contains_key("team")
+            && ctx.route_lock_path().exists()
         {
             return auto_switch(ctx, keychain, "team", "auto switched to team");
         }
         notification::notify_once(
             ctx,
             "reset",
-            "claude-plan-swap",
-            "team quota reset is complete. Run claude-plan-swap list.",
+            "claude-quota-router",
+            "team quota reset is complete. Run claude-quota-router list.",
         )
         .ok();
         return Ok(Some(
-            "team quota reset done -> claude-plan-swap list".to_string(),
+            "team quota reset done -> claude-quota-router list".to_string(),
         ));
     }
 
@@ -165,12 +167,12 @@ fn render_enterprise(
         notification::notify_once(
             ctx,
             "reset-1min",
-            "claude-plan-swap",
+            "claude-quota-router",
             "team quota resets within 1 minute.",
         )
         .ok();
         return Ok(Some(format!(
-            "team reset in {remaining}s({label}) -> claude-plan-swap list"
+            "team reset in {remaining}s({label}) -> claude-quota-router list"
         )));
     }
     if remaining <= 300 {
@@ -178,25 +180,25 @@ fn render_enterprise(
         notification::notify_once(
             ctx,
             "reset-5min",
-            "claude-plan-swap",
+            "claude-quota-router",
             &format!("team quota resets in {minutes} minutes."),
         )
         .ok();
         return Ok(Some(format!(
-            "team reset in {minutes}m({label}) -> claude-plan-swap list"
+            "team reset in {minutes}m({label}) -> claude-quota-router list"
         )));
     }
 
     let minutes = remaining / 60;
     if minutes >= 60 {
         Ok(Some(format!(
-            "{current_plan} | team reset in {}h{}m({label})",
+            "{current_account} | team reset in {}h{}m({label})",
             minutes / 60,
             minutes % 60
         )))
     } else {
         Ok(Some(format!(
-            "{current_plan} | team reset in {minutes}m({label})"
+            "{current_account} | team reset in {minutes}m({label})"
         )))
     }
 }
@@ -207,7 +209,7 @@ fn auto_switch(
     target: &str,
     message: &str,
 ) -> Result<Option<String>> {
-    let target = PlanName::parse(target)?;
+    let target = AccountName::parse(target)?;
     switcher::switch_to(
         ctx,
         keychain,

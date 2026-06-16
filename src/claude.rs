@@ -1,21 +1,21 @@
 //! Claude Code credential inspection.
 //!
-//! Plan kind is best read from `claude auth status` because that is the CLI's
+//! Account kind is best read from `claude auth status` because that is the CLI's
 //! active view of the account. The credential JSON is a fallback for tests and
 //! offline setup flows where the active CLI command is unavailable.
 
-use crate::domain::PlanKind;
+use crate::domain::AccountKind;
 use serde_json::Value;
 use std::process::Command;
 
-pub(crate) fn detect_plan_kind_from_active_credential(credential: &str) -> PlanKind {
-    if let Some(kind) = detect_plan_kind_from_claude_status() {
+pub(crate) fn detect_account_kind_from_active_credential(credential: &str) -> AccountKind {
+    if let Some(kind) = detect_account_kind_from_claude_status() {
         return kind;
     }
-    detect_plan_kind_from_credential(credential).unwrap_or(PlanKind::Other)
+    detect_account_kind_from_credential(credential).unwrap_or(AccountKind::Other)
 }
 
-fn detect_plan_kind_from_claude_status() -> Option<PlanKind> {
+fn detect_account_kind_from_claude_status() -> Option<AccountKind> {
     let output = Command::new("claude")
         .args(["auth", "status"])
         .output()
@@ -27,13 +27,13 @@ fn detect_plan_kind_from_claude_status() -> Option<PlanKind> {
     value
         .get("subscriptionType")
         .and_then(Value::as_str)
-        .map(PlanKind::from_subscription)
+        .map(AccountKind::from_subscription)
 }
 
-fn detect_plan_kind_from_credential(credential: &str) -> Option<PlanKind> {
+fn detect_account_kind_from_credential(credential: &str) -> Option<AccountKind> {
     let value: Value = serde_json::from_str(credential).ok()?;
     value
         .pointer("/claudeAiOauth/subscriptionType")
         .and_then(Value::as_str)
-        .map(PlanKind::from_subscription)
+        .map(AccountKind::from_subscription)
 }

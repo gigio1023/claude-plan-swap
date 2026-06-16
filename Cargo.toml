@@ -1,8 +1,8 @@
 [package]
-name = "claude-plan-swap"
+name = "claude-quota-router"
 version = "0.1.0"
 edition = "2024"
-description = "Quota-aware Claude Code plan switcher for macOS"
+description = "Quota-aware Claude Code account router for macOS"
 license = "MIT"
 
 [dependencies]

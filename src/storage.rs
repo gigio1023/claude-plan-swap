@@ -1,6 +1,6 @@
 //! JSON persistence for non-secret state.
 //!
-//! Secrets never pass through this module. Plan credentials live in Keychain;
+//! Secrets never pass through this module. Account credentials live in Keychain;
 //! this module stores only metadata, user configuration, notification markers,
 //! and the quota cache used by the statusline countdown.
 

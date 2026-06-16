@@ -4,12 +4,12 @@
 //! boundary narrow makes it clear where secret material can enter process memory
 //! and keeps persistence code from accidentally writing credentials to disk.
 
-use crate::domain::PlanName;
+use crate::domain::AccountName;
 use anyhow::{Context, Result, bail};
 use std::process::Command;
 
 const ACTIVE_SERVICE: &str = "Claude Code-credentials";
-const PLAN_SERVICE: &str = "claude-plan-swap";
+const ACCOUNT_SERVICE: &str = "claude-quota-router";
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Keychain;
@@ -23,23 +23,23 @@ impl Keychain {
         self.read(ACTIVE_SERVICE, account)
     }
 
-    /// Replace the active Claude Code credential with a previously saved plan.
+    /// Replace the active Claude Code credential with a previously saved account.
     pub(crate) fn upsert_active(&self, account: &str, credential: &str) -> Result<()> {
         self.upsert(ACTIVE_SERVICE, account, credential)
     }
 
-    /// Read a saved plan credential from the app-owned Keychain service.
-    pub(crate) fn read_plan(&self, name: &PlanName) -> Result<String> {
-        self.read(PLAN_SERVICE, &plan_account(name))
+    /// Read a saved account credential from the app-owned Keychain service.
+    pub(crate) fn read_account(&self, name: &AccountName) -> Result<String> {
+        self.read(ACCOUNT_SERVICE, &stored_account(name))
     }
 
-    /// Store a plan credential without writing it to the filesystem.
-    pub(crate) fn upsert_plan(&self, name: &PlanName, credential: &str) -> Result<()> {
-        self.upsert(PLAN_SERVICE, &plan_account(name), credential)
+    /// Store an account credential without writing it to the filesystem.
+    pub(crate) fn upsert_account(&self, name: &AccountName, credential: &str) -> Result<()> {
+        self.upsert(ACCOUNT_SERVICE, &stored_account(name), credential)
     }
 
-    pub(crate) fn delete_plan(&self, name: &PlanName) -> Result<()> {
-        self.delete(PLAN_SERVICE, &plan_account(name))
+    pub(crate) fn delete_account(&self, name: &AccountName) -> Result<()> {
+        self.delete(ACCOUNT_SERVICE, &stored_account(name))
     }
 
     pub(crate) fn detect_active_account(&self) -> Result<String> {
@@ -103,8 +103,8 @@ impl Keychain {
     }
 }
 
-fn plan_account(name: &PlanName) -> String {
-    format!("plan:{name}")
+fn stored_account(name: &AccountName) -> String {
+    format!("account:{name}")
 }
 
 fn parse_keychain_account(output: &str) -> Option<String> {

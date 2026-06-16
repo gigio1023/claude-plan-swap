@@ -1,4 +1,4 @@
-//! Filesystem context for Claude Plan Swap.
+//! Filesystem context for Claude Quota Router.
 //!
 //! Paths are centralized here so command logic can refer to semantic locations
 //! rather than rebuilding path strings across modules.
@@ -8,7 +8,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-const APP_HOME_ENV: &str = "CLAUDE_PLAN_SWAP_HOME";
+const APP_HOME_ENV: &str = "CLAUDE_QUOTA_ROUTER_HOME";
 const CLAUDE_HOME_ENV: &str = "CLAUDE_HOME";
 
 #[derive(Clone, Debug)]
@@ -22,7 +22,7 @@ impl AppContext {
         let app_dir = if let Some(path) = env::var_os(APP_HOME_ENV) {
             PathBuf::from(path)
         } else {
-            home_dir()?.join(".config").join("claude-plan-swap")
+            home_dir()?.join(".config").join("claude-quota-router")
         };
 
         let claude_dir = if let Some(path) = env::var_os(CLAUDE_HOME_ENV) {
@@ -63,8 +63,8 @@ impl AppContext {
         self.app_dir.join("notified.json")
     }
 
-    pub(crate) fn swap_lock_path(&self) -> PathBuf {
-        self.app_dir.join("swapped.lock")
+    pub(crate) fn route_lock_path(&self) -> PathBuf {
+        self.app_dir.join("auto-route.lock")
     }
 
     pub(crate) fn inner_statusline_path(&self) -> PathBuf {

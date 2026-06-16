@@ -5,7 +5,7 @@
 //! where business rules accumulate.
 
 use crate::app::App;
-use crate::domain::{PlanKind, SwapMode};
+use crate::domain::{AccountKind, RoutingMode};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -18,30 +18,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Save the active Claude Code credential as a named plan.
+    /// Save the active Claude Code credential as a named account.
     Setup {
-        /// Plan name, for example team, enterprise, team-2, or backup.
+        /// Account name, for example team, enterprise, team-2, or backup.
         name: String,
-        /// Override the plan kind. If omitted, claude auth status is used.
+        /// Override the account kind. If omitted, claude auth status is used.
         #[arg(long, value_enum)]
-        kind: Option<PlanKind>,
+        kind: Option<AccountKind>,
     },
-    /// Switch the active Claude Code credential to a saved plan.
+    /// Switch the active Claude Code credential to a saved account.
     Switch {
         name: String,
         #[arg(short, long)]
         yes: bool,
     },
-    /// Switch back to the previous plan.
+    /// Switch back to the previous account.
     Toggle {
         #[arg(short, long)]
         yes: bool,
     },
-    /// List saved plans.
+    /// List saved accounts.
     List,
-    /// Remove a saved plan.
+    /// Remove a saved account.
     Remove { name: String },
-    /// Print the current plan name.
+    /// Print the current account name.
     Current,
     /// Show state, config, and cached quota information.
     Status,
@@ -50,7 +50,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         alert_at: Option<u8>,
         #[arg(long, value_enum)]
-        mode: Option<SwapMode>,
+        mode: Option<RoutingMode>,
     },
     /// Install the Claude Code statusLine wrapper.
     Install,

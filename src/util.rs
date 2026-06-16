@@ -30,8 +30,8 @@ mod tests {
     #[test]
     fn quotes_shell_paths() {
         assert_eq!(
-            shell_quote(Path::new("/tmp/a b/plan's/bin")),
-            "'/tmp/a b/plan'\\''s/bin'"
+            shell_quote(Path::new("/tmp/a b/account's/bin")),
+            "'/tmp/a b/account'\\''s/bin'"
         );
     }
 }

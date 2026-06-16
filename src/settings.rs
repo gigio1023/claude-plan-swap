@@ -76,7 +76,7 @@ fn statusline_command() -> Result<String> {
 }
 
 fn is_our_statusline_command(command: &str) -> bool {
-    command.contains("claude-plan-swap") && command.contains("statusline")
+    command.contains("claude-quota-router") && command.contains("statusline")
 }
 
 fn load_settings(path: &Path) -> Result<Value> {
